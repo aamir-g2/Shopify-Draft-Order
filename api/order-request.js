@@ -82,11 +82,6 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST, OPTIONS');
-    return res.status(405).json({ message: 'Method Not Allowed' });
-  }
-
   if (req.method === 'GET' && DEBUG) {
     return res.status(200).json({
       shop: process.env.SHOPIFY_SHOP,
@@ -96,6 +91,10 @@ export default async function handler(req, res) {
     });
   }
 
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST, OPTIONS');
+    return res.status(405).json({ message: 'Method Not Allowed' });
+  }
 
   // Security gates
   if (isAppProxy(req)) {

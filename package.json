@@ -1,0 +1,8 @@
+{
+  "name": "order-request-vercel",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vercel dev"
+  }
+}

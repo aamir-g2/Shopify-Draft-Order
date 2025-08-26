@@ -87,6 +87,13 @@ async function admin(path, init = {}) {
   return res.json();
 }
 
+function parseEmails(s) {
+  return String(s || '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
 export default async function handler(req, res) {
   // CORS preflight for DIRECT mode
   if (req.method === 'OPTIONS') {
@@ -207,6 +214,8 @@ export default async function handler(req, res) {
     let invoiceSent = false;
     let invoiceError = null;
 
+    const bccList = parseEmails(STORE_NOTIFY_EMAIL);
+
     async function trySend(body) {
       await admin(`/draft_orders/${draft.id}/send_invoice.json`, {
         method: 'POST',
@@ -216,26 +225,29 @@ export default async function handler(req, res) {
 
     try {
       // 1) Minimal request
-      await trySend({
+      const minimal = {
         draft_order_invoice: {
           to: customer_context.email,
-          bcc: STORE_NOTIFY_EMAIL || undefined
+          ...(bccList.length ? { bcc: bccList } : {})
         }
-      });
+      };
+      await trySend(minimal);
       invoiceSent = true;
     } catch (e1) {
       invoiceError = e1?.message || String(e1);
       console.warn('send_invoice minimal failed:', invoiceError);
+
       // 2) Retry with subject/custom message
       try {
-        await trySend({
+        const verbose = {
           draft_order_invoice: {
             to: customer_context.email,
-            bcc: STORE_NOTIFY_EMAIL || undefined,
+            ...(bccList.length ? { bcc: bccList } : {}),
             subject: `Order request ${draft.name}`,
             custom_message: `Hi ${customer_context.name},\n\nWe received your order request. Reference: ${draft.name}\nOur team will review and confirm next steps.\n\nThank you.`
           }
-        });
+        };
+        await trySend(verbose);
         invoiceSent = true;
         invoiceError = null;
       } catch (e2) {

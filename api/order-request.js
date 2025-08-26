@@ -87,6 +87,16 @@ export default async function handler(req, res) {
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
 
+  if (req.method === 'GET' && DEBUG) {
+    return res.status(200).json({
+      shop: process.env.SHOPIFY_SHOP,
+      apiVersion: process.env.SHOPIFY_API_VERSION,
+      hasToken: !!process.env.SHOPIFY_ADMIN_TOKEN,
+      tokenLen: (process.env.SHOPIFY_ADMIN_TOKEN || '').length
+    });
+  }
+
+
   // Security gates
   if (isAppProxy(req)) {
     if (!validateAppProxySignature(req)) {
@@ -194,9 +204,8 @@ export default async function handler(req, res) {
     });
   } catch (e) {
     console.error('Handler error:', e?.message || e);
-    if (DEBUG) {
-      return res.status(500).json({ message: 'Server error', detail: String(e?.message || e) });
-    }
+    if (DEBUG) return res.status(500).json({ message: 'Server error', detail: String(e?.message || e) });
+
     return res.status(500).json({ message: 'Server error' });
   }
 

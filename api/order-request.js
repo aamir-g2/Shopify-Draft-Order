@@ -203,24 +203,47 @@ export default async function handler(req, res) {
     if (!draft?.id) return res.status(502).json({ message: 'Failed to create draft order', detail: draftRes });
 
     // Send invoice (Shopify emails the customer; optional BCC to store)
-    let invoiceSent = true;
-    try {
-      const invBody = {
-        draft_order_invoice: {
-          to: customer_context.email,
-          bcc: STORE_NOTIFY_EMAIL || undefined,
-          subject: `Order request ${draft.name}`,
-          custom_message: `Hi ${customer_context.name},\n\nWe received your order request. Reference: ${draft.name}\nOur team will review and confirm next steps.\n\nThank you.`
-        }
-      };
+    // Strategy: try minimal payload first (highest compatibility). If it fails, retry with subject/custom_message.
+    let invoiceSent = false;
+    let invoiceError = null;
+
+    async function trySend(body) {
       await admin(`/draft_orders/${draft.id}/send_invoice.json`, {
         method: 'POST',
-        body: JSON.stringify(invBody)
+        body: JSON.stringify(body)
       });
-    } catch (e) {
-      invoiceSent = false;
-      console.warn('send_invoice failed:', e?.message || e);
     }
+
+    try {
+      // 1) Minimal request
+      await trySend({
+        draft_order_invoice: {
+          to: customer_context.email,
+          bcc: STORE_NOTIFY_EMAIL || undefined
+        }
+      });
+      invoiceSent = true;
+    } catch (e1) {
+      invoiceError = e1?.message || String(e1);
+      console.warn('send_invoice minimal failed:', invoiceError);
+      // 2) Retry with subject/custom message
+      try {
+        await trySend({
+          draft_order_invoice: {
+            to: customer_context.email,
+            bcc: STORE_NOTIFY_EMAIL || undefined,
+            subject: `Order request ${draft.name}`,
+            custom_message: `Hi ${customer_context.name},\n\nWe received your order request. Reference: ${draft.name}\nOur team will review and confirm next steps.\n\nThank you.`
+          }
+        });
+        invoiceSent = true;
+        invoiceError = null;
+      } catch (e2) {
+        invoiceError = e2?.message || String(e2);
+        console.warn('send_invoice with subject/custom_message failed:', invoiceError);
+      }
+    }
+
 
     return res.status(200).json({
       ok: true,

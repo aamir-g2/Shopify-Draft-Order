@@ -254,6 +254,7 @@ export default async function handler(req, res) {
         invoice_url: draft.invoice_url
       },
       invoice_sent: invoiceSent,
+      ...(DEBUG && !invoiceSent ? { invoice_error: invoiceError } : {}),
       mode: isAppProxy(req) ? 'app_proxy' : 'direct'
     });
   } catch (e) {

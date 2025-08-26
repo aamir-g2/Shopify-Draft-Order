@@ -181,16 +181,19 @@ export default async function handler(req, res) {
     ].filter(Boolean);
 
     // Create Draft Order
+    const TAGS = ['Order Request', 'Pending Approval'];
+
     const draftPayload = {
       draft_order: {
         line_items,
         email: customer_context.email,
         customer: customerId ? { id: customerId } : undefined,
         note: noteLines.join('\n'),
-        tags: ['Order Request', 'Pending Approval'],
+        tags: TAGS.join(', '),                  // ← string, not array
         use_customer_default_address: true
       }
     };
+
 
     const draftRes = await admin('/draft_orders.json', {
       method: 'POST',

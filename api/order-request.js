@@ -4,15 +4,24 @@ import crypto from 'node:crypto';
 const DEBUG = process.env.DEBUG === '1';
 
 // ---- ENV ----
-const SHOPIFY_SHOP        = process.env.SHOPIFY_SHOP;          // your-store.myshopify.com
+const SHOPIFY_SHOP        = process.env.SHOPIFY_SHOP;          // e.g. g2-thelab.myshopify.com
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;   // shpat_...
-const SHOPIFY_API_SECRET  = process.env.SHOPIFY_API_SECRET || ''; // App Proxy secret (leave blank if not using)
-const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2023-10';
+const SHOPIFY_API_SECRET  = process.env.SHOPIFY_API_SECRET || ''; // App Proxy secret (if using)
+const SHOPIFY_API_VERSION = process.env.SHOPIFY_API_VERSION || '2025-01';
 
 // For DIRECT mode (no App Proxy):
-const ALLOW_ORIGIN      = process.env.ALLOW_ORIGIN || '';       // e.g. https://yourstore.com
-const ALLOW_SHOP_DOMAIN = process.env.ALLOW_SHOP_DOMAIN || '';  // e.g. your-store.myshopify.com
-const STORE_NOTIFY_EMAIL = process.env.STORE_NOTIFY_EMAIL || ''; // optional BCC
+const ALLOW_ORIGIN_RAW      = process.env.ALLOW_ORIGIN || '';      // comma-separated allowed origins
+const ALLOW_SHOP_DOMAIN_RAW = process.env.ALLOW_SHOP_DOMAIN || ''; // comma-separated shop domains
+const STORE_NOTIFY_EMAIL    = process.env.STORE_NOTIFY_EMAIL || ''; // optional BCC
+
+function parseList(s) {
+  return String(s || '')
+    .split(',')
+    .map(v => v.trim().replace(/\/$/, '').toLowerCase())
+    .filter(Boolean);
+}
+const ALLOW_ORIGINS = parseList(ALLOW_ORIGIN_RAW);
+const ALLOW_SHOPS   = parseList(ALLOW_SHOP_DOMAIN_RAW);
 
 function isAppProxy(req) {
   return typeof req.query?.signature === 'string';
@@ -40,11 +49,19 @@ function validateAppProxySignature(req) {
   }
 }
 
-function passDirectGuards(req) {
-  const origin = req.headers.origin || '';
-  const shopHdr = req.headers['x-shop-domain'] || '';
-  if (ALLOW_ORIGIN && origin !== ALLOW_ORIGIN) return false;
-  if (ALLOW_SHOP_DOMAIN && shopHdr !== ALLOW_SHOP_DOMAIN) return false;
+function passDirectGuards(req, res) {
+  const origin  = String(req.headers.origin || '').replace(/\/$/, '').toLowerCase();
+  const shopHdr = String(req.headers['x-shop-domain'] || '').toLowerCase();
+
+  const okOrigin = !ALLOW_ORIGINS.length || ALLOW_ORIGINS.includes(origin);
+  const okShop   = !ALLOW_SHOPS.length   || ALLOW_SHOPS.includes(shopHdr);
+  if (!okOrigin || !okShop) return false;
+
+  // Reflect origin for CORS if we’re allowing it
+  if (origin && ALLOW_ORIGINS.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+  }
   return true;
 }
 
@@ -73,26 +90,33 @@ async function admin(path, init = {}) {
 export default async function handler(req, res) {
   // CORS preflight for DIRECT mode
   if (req.method === 'OPTIONS') {
-    if (ALLOW_ORIGIN) {
-      res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
-      res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Shop-Domain');
-      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Shop-Domain');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    // We reflect the actual Origin in passDirectGuards; here we can be permissive
+    if (ALLOW_ORIGINS.length) {
+      const origin = String(req.headers.origin || '').replace(/\/$/, '').toLowerCase();
+      if (ALLOW_ORIGINS.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Vary', 'Origin');
+      }
     }
     return res.status(204).end();
   }
 
-  if (req.method === 'GET' && DEBUG) {
+  // ✅ DEBUG GET placed BEFORE 405 so it actually runs
+  if (DEBUG && req.method === 'GET') {
     return res.status(200).json({
       shop: process.env.SHOPIFY_SHOP,
       apiVersion: process.env.SHOPIFY_API_VERSION,
       hasToken: !!process.env.SHOPIFY_ADMIN_TOKEN,
-      tokenLen: (process.env.SHOPIFY_ADMIN_TOKEN || '').length
+      tokenLen: (process.env.SHOPIFY_ADMIN_TOKEN || '').length,
+      allowOrigins: ALLOW_ORIGINS,
+      allowShops: ALLOW_SHOPS
     });
   }
 
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST, OPTIONS');
+    res.setHeader('Allow', DEBUG ? 'POST, GET, OPTIONS' : 'POST, OPTIONS');
     return res.status(405).json({ message: 'Method Not Allowed' });
   }
 
@@ -102,16 +126,21 @@ export default async function handler(req, res) {
       return res.status(401).json({ message: 'Invalid app proxy signature' });
     }
   } else {
-    if (!passDirectGuards(req)) {
+    if (!passDirectGuards(req, res)) {
+      if (DEBUG) {
+        const origin = String(req.headers.origin || '');
+        const shopHdr = String(req.headers['x-shop-domain'] || '');
+        return res.status(401).json({
+          message: 'Unauthorized origin/shop',
+          got: { origin, shop: shopHdr },
+          expect: { origins: ALLOW_ORIGINS, shops: ALLOW_SHOPS }
+        });
+      }
       return res.status(401).json({ message: 'Unauthorized origin/shop' });
-    }
-    if (ALLOW_ORIGIN) {
-      res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
-      res.setHeader('Vary', 'Origin');
     }
   }
 
-  // Parse JSON body (Vercel already parses when Content-Type: application/json)
+  // Parse JSON body
   const input = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || null);
   if (!input) return res.status(400).json({ message: 'Invalid JSON body' });
 
@@ -204,8 +233,6 @@ export default async function handler(req, res) {
   } catch (e) {
     console.error('Handler error:', e?.message || e);
     if (DEBUG) return res.status(500).json({ message: 'Server error', detail: String(e?.message || e) });
-
     return res.status(500).json({ message: 'Server error' });
   }
-
 }

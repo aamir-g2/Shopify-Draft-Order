@@ -1,6 +1,8 @@
 // api/order-request.js
 import crypto from 'node:crypto';
 
+const DEBUG = process.env.DEBUG === '1';
+
 // ---- ENV ----
 const SHOPIFY_SHOP        = process.env.SHOPIFY_SHOP;          // your-store.myshopify.com
 const SHOPIFY_ADMIN_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;   // shpat_...
@@ -192,6 +194,10 @@ export default async function handler(req, res) {
     });
   } catch (e) {
     console.error('Handler error:', e?.message || e);
+    if (DEBUG) {
+      return res.status(500).json({ message: 'Server error', detail: String(e?.message || e) });
+    }
     return res.status(500).json({ message: 'Server error' });
   }
+
 }
